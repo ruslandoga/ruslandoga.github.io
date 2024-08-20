@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, shrink-to-fit=no"
+    />
+    <meta name="theme-color" content="#000000" />
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@algolia/autocomplete-js"></script>
+    <link rel="stylesheet" href="index.css" />
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/@algolia/autocomplete-theme-classic"
+    />
+    <script src="https://cdn.jsdelivr.net/npm/typesense@1/dist/typesense.min.js"></script>
+
+    <title>Hexdocs+Typesense</title>
+
+    <style>
+      mark {
+        display: inline;
+        background-color: #f5d0fe;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="container mx-auto p-4">
+      <div class="flex">
+        <div id="autocomplete" class="w-full"></div>
+      </div>
+    </div>
+
+    <script>
+      const urlParams = new URLSearchParams(window.location.search);
+      const packages = urlParams
+        .get("packages")
+        ?.split(",")
+        .filter((pkg) => pkg.trim() !== "");
+
+      let typesenseClient = new Typesense.Client({
+        nodes: [
+          { host: "typesense.copycat.fun", port: "443", protocol: "https" },
+        ],
+        apiKey: "hexdocs",
+        connectionTimeoutSeconds: 2,
+      });
+
+      const { autocomplete } = window["@algolia/autocomplete-js"];
+
+      let placeholder;
+
+      if (packages && packages.length > 0) {
+        placeholder = `Search for docs within ${packages.join(", ")}`;
+      } else {
+        placeholder = "Search for docs across all packages";
+      }
+
+      autocomplete({
+        container: "#autocomplete",
+        placeholder,
+
+        async getSources({ query }) {
+          const searchParams = {
+            q: query,
+            query_by: "title,doc",
+            query_by_weights: "2,1",
+            // group_by: "package",
+            // group_limit: 10,
+            highlight_full_fields: "title",
+            highlight_fields: "title,doc",
+            include_fields: "title,doc,ref,package",
+          };
+
+          if (packages && packages.length > 0) {
+            searchParams.filter_by = `package:=[${packages.join(",")}]`;
+          }
+
+          const results = await typesenseClient
+            .collections("hexdocs-full-text")
+            .documents()
+            .search(searchParams);
+
+          console.log("results", results);
+
+          return [
+            {
+              sourceId: "hexdocs-full-text",
+              getItems() {
+                return results.hits;
+              },
+              getItemInputValue({ item }) {
+                return item.document.name;
+              },
+              templates: {
+                item({ item, html }) {
+                  console.log("item", item);
+
+                  const title = html`${(
+                    item.highlights.find((h) => h.field === "title") || {
+                      value: item.document.title,
+                    }
+                  ).value}`;
+
+                  const doc = html`${(
+                    item.highlights.find((h) => h.field === "doc") || {
+                      snippet: item.document.doc,
+                    }
+                  ).snippet}`;
+
+                  return html`<a
+                    href="https://hexdocs.pm/${item.document.package}/${item
+                      .document.ref}"
+                    ><div class="p-2 text-sm">
+                      <div class="flex items-center space-x-2 text-slate-500">
+                        <span>(${item.document.package})</span>
+                        <pre
+                          class="text-slate-700"
+                          dangerouslySetInnerHTML=${{ __html: title }}
+                        ></pre>
+                      </div>
+                      <pre
+                        class="mt-2 p-2 bg-slate-100 border rounded text-slate-700"
+                        dangerouslySetInnerHTML=${{ __html: doc }}
+                      ></pre></div
+                  ></a>`;
+                },
+                noResults() {
+                  return "No results found.";
+                },
+              },
+            },
+          ];
+        },
+      });
+    </script>
+  </body>
+</html>
