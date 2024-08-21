@@ -41,6 +41,8 @@
         ?.split(",")
         .filter((pkg) => pkg.trim() !== "");
 
+      const collection = urlParams.get("collection") || "hexdocs-full-text";
+
       let typesenseClient = new Typesense.Client({
         nodes: [
           { host: "typesense.copycat.fun", port: "443", protocol: "https" },
@@ -80,7 +82,7 @@
           }
 
           const results = await typesenseClient
-            .collections("hexdocs-full-text")
+            .collections(collection)
             .documents()
             .search(searchParams);
 
@@ -88,7 +90,7 @@
 
           return [
             {
-              sourceId: "hexdocs-full-text",
+              sourceId: collection,
               getItems() {
                 return results.hits;
               },
