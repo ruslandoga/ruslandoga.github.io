@@ -29,30 +29,58 @@
       import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.1-dev132.0/+esm";
 
       async function main() {
-        const JSDELIVR_BUNDLES = duckdb.getJsDelivrBundles();
-        const bundle = await duckdb.selectBundle(JSDELIVR_BUNDLES);
+        const outputDiv = document.getElementById("output");
+        let db;
 
-        const scriptURL = URL.createObjectURL(
-          new Blob([`importScripts("${bundle.mainWorker}");`], {
-            type: "text/javascript",
-          })
-        );
+        try {
+          outputDiv.textContent = "Initializing DuckDB...";
+          const JSDELIVR_BUNDLES = duckdb.getJsDelivrBundles();
+          const bundle = await duckdb.selectBundle(JSDELIVR_BUNDLES);
 
-        const worker = new Worker(scriptURL);
-        const logger = new duckdb.ConsoleLogger();
-        const db = new duckdb.AsyncDuckDB(logger, worker);
-        await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
-        URL.revokeObjectURL(scriptURL);
+          const scriptURL = URL.createObjectURL(
+            new Blob([`importScripts("${bundle.mainWorker}");`], {
+              type: "text/javascript",
+            })
+          );
 
-        const c = await db.connect();
-        const result = await c.query("SELECT 42 AS an_answer;");
+          const worker = new Worker(scriptURL);
+          const logger = new duckdb.ConsoleLogger();
+          const db = new duckdb.AsyncDuckDB(logger, worker);
 
-        document.getElementById(
-          "output"
-        ).textContent = `Query Result: ${JSON.stringify(result.toArray())}`;
+          outputDiv.textContent = "Instantiating DuckDB worker...";
+          await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
+          URL.revokeObjectURL(scriptURL);
 
-        await c.close();
-        await db.terminate();
+          outputDiv.textContent = "Connecting to database...";
+          const c = await db.connect();
+
+          outputDiv.textContent = "Running query...";
+          const result = await c.query(
+            "select count(*) as heartbeats from 'https://stats.r2.edify.space/test.parquet';"
+          );
+
+          const replacer = (key, value) =>
+            typeof value === "bigint" ? value.toString() : value;
+
+          outputDiv.textContent = `Query Result: ${JSON.stringify(
+            result.toArray(),
+            replacer
+          )}`;
+
+          await c.close();
+          await db.terminate();
+        } catch (e) {
+          console.error(e);
+          outputDiv.textContent = `Error: ${e.message}\n\nSee browser console for more details.`;
+
+          if (typeof db !== "undefined" && db.terminate) {
+            try {
+              await db.terminate();
+            } catch (cleanupError) {
+              console.error("Error during cleanup:", cleanupError);
+            }
+          }
+        }
       }
 
       main();
