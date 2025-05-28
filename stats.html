@@ -105,7 +105,7 @@ FROM (
   SELECT
     language,
     lag(time) OVER (ORDER BY time) AS prev_time,
-    epoch(time - prev_time) AS raw_duration,
+    epoch(time) - epoch(prev_time) AS raw_duration,
     raw_duration * (raw_duration <= 360)::INT AS duration
   FROM 'https://stats.r2.edify.space/test.parquet'
 )
