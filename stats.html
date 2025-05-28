@@ -1,94 +1,233 @@
 <!DOCTYPE html>
 <html>
   <head>
-    <title>here, duck</title>
+    <title>DuckDB Wasm Dashboard</title>
     <meta charset="utf-8" />
     <link
       rel="icon"
       href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🦆</text></svg>"
     />
     <style type="text/css">
-      html,
-      body {
-        height: 100%;
-        width: 100%;
-      }
       body {
         background-color: black;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        margin: 0;
+        color: #ddd;
         font-family: monospace;
+        margin: 0;
+        padding: 20px;
+        display: flex;
+        flex-direction: column;
+        min-height: 100vh;
+        box-sizing: border-box;
       }
       ::selection {
         background: #4b2858;
       }
+      h1,
+      h2 {
+        color: #00ff00; /* Greenish for headings */
+        margin-top: 0;
+      }
+      .container {
+        display: flex;
+        flex-wrap: wrap; /* Allow wrapping on smaller screens */
+        gap: 20px;
+        flex-grow: 1;
+      }
+      .query-panel,
+      .output-panel {
+        background-color: #111; /* Slightly lighter than body */
+        border: 1px solid #333;
+        padding: 15px;
+        border-radius: 5px;
+      }
+      .query-panel {
+        flex: 1; /* Takes up 1 part of space */
+        min-width: 300px; /* Minimum width before wrapping */
+      }
+      .output-panel {
+        flex: 2; /* Takes up 2 parts of space */
+        min-width: 400px;
+        display: flex;
+        flex-direction: column;
+      }
+      #sqlQueryDisplay {
+        background-color: #000;
+        color: #ccc;
+        padding: 10px;
+        border-radius: 3px;
+        white-space: pre-wrap; /* Keep query formatting */
+        overflow-x: auto;
+        font-size: 0.9em;
+      }
+      #progressOutput {
+        color: #00ff00; /* Green for progress */
+        white-space: pre-wrap;
+        margin-bottom: 15px;
+        min-height: 40px; /* Space for messages */
+        background-color: #0a0a0a;
+        padding: 10px;
+        border-radius: 3px;
+      }
+      #tableResultOutput table {
+        border-collapse: collapse;
+        width: 100%; /* Make table take full width of its container */
+        font-size: 0.9em;
+        margin-top: 10px;
+      }
+      #tableResultOutput th,
+      #tableResultOutput td {
+        border: 1px solid #444; /* CLI-like borders */
+        padding: 6px 8px;
+        text-align: left;
+        white-space: nowrap; /* Prevent line breaks in cells for ASCII feel */
+      }
+      #tableResultOutput th {
+        background-color: #2a2a2a; /* Darker header */
+        color: #00ff00; /* Header text color */
+        /* ASCII-like header separators */
+        border-bottom: 2px solid #555;
+      }
+      #tableResultOutput td {
+        color: #ddd;
+      }
+      #tableResultOutput {
+        flex-grow: 1;
+        overflow: auto; /* Allow scrolling for large tables */
+      }
     </style>
     <script type="module">
-      import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.1-dev132.0/+esm";
+      import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.1-dev207.0/+esm";
+
+      const sqlQuery = `SELECT
+  language,
+  to_seconds(sum(duration)) AS 'time spent'
+FROM (
+  SELECT
+    language,
+    lag(time) OVER (ORDER BY time) AS prev_time,
+    epoch(time) - epoch(prev_time) AS raw_duration,
+    raw_duration * (raw_duration <= 360)::INT AS duration
+  FROM 'https://stats.r2.edify.space/test.parquet'
+)
+WHERE language IS NOT NULL AND language != '<<LAST_LANGUAGE>>'
+GROUP BY language
+ORDER BY sum(duration) DESC
+LIMIT 15;`;
 
       async function main() {
-        const outputDiv = document.getElementById("output");
+        const sqlQueryDisplay = document.getElementById("sqlQueryDisplay");
+        const progressOutput = document.getElementById("progressOutput");
+        const tableResultOutput = document.getElementById("tableResultOutput");
         let db;
 
+        sqlQueryDisplay.textContent = sqlQuery.trim();
+
         try {
-          outputDiv.textContent = "Initializing DuckDB...";
+          progressOutput.style.color = "#00ff00";
+          progressOutput.textContent = "Initializing DuckDB...";
+
           const JSDELIVR_BUNDLES = duckdb.getJsDelivrBundles();
           const bundle = await duckdb.selectBundle(JSDELIVR_BUNDLES);
-
           const scriptURL = URL.createObjectURL(
             new Blob([`importScripts("${bundle.mainWorker}");`], {
               type: "text/javascript",
             })
           );
-
           const worker = new Worker(scriptURL);
           const logger = new duckdb.ConsoleLogger();
-          const db = new duckdb.AsyncDuckDB(logger, worker);
+          db = new duckdb.AsyncDuckDB(logger, worker);
 
-          outputDiv.textContent = "Instantiating DuckDB worker...";
+          progressOutput.textContent = "Instantiating DuckDB worker...";
           await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
           URL.revokeObjectURL(scriptURL);
 
-          outputDiv.textContent = "Connecting to database...";
+          progressOutput.textContent = "Connecting to database...";
           const c = await db.connect();
 
-          outputDiv.textContent = "Running query...";
-          const result = await c.query(
-            "select count(*) as heartbeats from 'https://stats.r2.edify.space/test.parquet';"
-          );
+          progressOutput.textContent =
+            "Running query (this might take a moment for remote Parquet)...";
+          const arrowTable = await c.query(sqlQuery);
 
-          const replacer = (key, value) =>
-            typeof value === "bigint" ? value.toString() : value;
+          progressOutput.textContent = "Query finished. Rendering results...";
 
-          outputDiv.textContent = `Query Result: ${JSON.stringify(
-            result.toArray(),
-            replacer
-          )}`;
+          // Convert Arrow Table to an array of objects.
+          // The interval 'time spent' should be a string by default from toArray().
+          const data = arrowTable.toArray().map((row) => {
+            const newRow = {};
+            for (const key in row) {
+              // Convert BigInt to string if any, though 'time spent' is likely already a string.
+              newRow[key] =
+                typeof row[key] === "bigint" ? row[key].toString() : row[key];
+            }
+            return newRow;
+          });
+
+          if (data.length === 0) {
+            tableResultOutput.textContent = "Query returned no results.";
+            progressOutput.textContent = "Done.";
+          } else {
+            let htmlTable = "<table><thead><tr>";
+            const headers = Object.keys(data[0]);
+            headers.forEach((header) => {
+              htmlTable += `<th>${header}</th>`;
+            });
+            htmlTable += "</tr></thead><tbody>";
+
+            data.forEach((row) => {
+              htmlTable += "<tr>";
+              headers.forEach((header) => {
+                const value =
+                  row[header] === null || row[header] === undefined
+                    ? ""
+                    : row[header];
+                htmlTable += `<td>${value}</td>`;
+              });
+              htmlTable += "</tr>";
+            });
+
+            htmlTable += "</tbody></table>";
+            tableResultOutput.innerHTML = htmlTable;
+            progressOutput.textContent = `Done. Displaying ${data.length} rows.`;
+          }
 
           await c.close();
           await db.terminate();
         } catch (e) {
           console.error(e);
-          outputDiv.textContent = `Error: ${e.message}\n\nSee browser console for more details.`;
-
-          if (typeof db !== "undefined" && db.terminate) {
+          progressOutput.style.color = "red";
+          progressOutput.textContent = `Error: ${e.message}\n\nSee browser console for more details.`;
+          tableResultOutput.innerHTML = `<p style="color:red;">Failed to display results due to error.</p>`;
+          if (db && db.terminate) {
             try {
+              progressOutput.innerHTML +=
+                "<br/>Attempting to terminate DuckDB worker...";
               await db.terminate();
+              progressOutput.innerHTML += "<br/>DuckDB worker terminated.";
             } catch (cleanupError) {
               console.error("Error during cleanup:", cleanupError);
+              progressOutput.innerHTML += `<br/>Error during cleanup: ${cleanupError.message}`;
             }
           }
         }
       }
-
       main();
     </script>
   </head>
   <body>
-    <div id="output" style="color: red">
-      Loading DuckDB and running query...
+    <h1>DuckDB Wasm Dashboard</h1>
+    <div class="container">
+      <div class="query-panel">
+        <h2>SQL Query:</h2>
+        <pre id="sqlQueryDisplay"></pre>
+      </div>
+      <div class="output-panel">
+        <h2>Progress:</h2>
+        <div id="progressOutput">Loading DuckDB and running query...</div>
+        <h2>Result:</h2>
+        <div id="tableResultOutput">
+          <!-- Table will be injected here -->
+        </div>
+      </div>
     </div>
   </body>
 </html>
