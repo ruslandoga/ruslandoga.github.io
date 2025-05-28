@@ -157,8 +157,8 @@ from (
     raw_duration * (raw_duration <= 360)::int as duration
   from 'https://stats.r2.edify.space/test.parquet'
 )
-where language is not null and language != '<<LAST_LANGUAGE>>'
 group by language
+having language is not null and language != '<<LAST_LANGUAGE>>'
 order by sum(duration) desc
 limit 15;`;
 
